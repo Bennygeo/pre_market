@@ -33,9 +33,9 @@ from email.mime.text import MIMEText
 # ─────────────────────────────────────────────
 #  CONFIG  — edit these
 # ─────────────────────────────────────────────
-GMAIL_SENDER    = "lifiadesign@gmail.com"
-GMAIL_APP_PASS  = "mlmw ncrf fvnt nyfu"   # Gmail App Password (16 chars)
-REPORT_TO       = ["benny_gj@yahoo.co.in"] # recipient list
+GMAIL_SENDER   = os.environ["GMAIL_SENDER"]
+GMAIL_APP_PASS = os.environ["GMAIL_APP_PASS"]
+REPORT_TO      = os.environ["REPORT_TO"].split(",")  # recipient list
 TOP_N           = 5                        # advances + declines count
 
 IST = pytz.timezone("Asia/Kolkata")
