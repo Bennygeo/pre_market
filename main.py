@@ -33,8 +33,8 @@ from email.mime.text import MIMEText
 # ─────────────────────────────────────────────
 #  CONFIG  — edit these
 # ─────────────────────────────────────────────
-GMAIL_SENDER    = "benny_gj@yahoo.co.in"
-GMAIL_APP_PASS  = "xxxx xxxx xxxx xxxx"   # Gmail App Password (16 chars)
+GMAIL_SENDER    = "lifiadesign@gmail.com"
+GMAIL_APP_PASS  = "mlmw ncrf fvnt nyfu"   # Gmail App Password (16 chars)
 REPORT_TO       = ["benny_gj@yahoo.co.in"] # recipient list
 TOP_N           = 5                        # advances + declines count
 
