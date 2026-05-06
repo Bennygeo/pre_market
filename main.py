@@ -29,6 +29,7 @@ import pytz
 from datetime import date, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+import json
 
 # ─────────────────────────────────────────────
 #  CONFIG  — edit these
@@ -112,12 +113,36 @@ HEADERS = {
 NSE_PREMARKET_URL = "https://www.nseindia.com/api/market-data-pre-open?key=ALL"
 
 
-def get_nse_session() -> requests.Session:
-    """NSE requires a cookie from the main page before API calls."""
-    s = requests.Session()
-    s.headers.update(HEADERS)
-    s.get("https://www.nseindia.com", timeout=10)
-    return s
+def get_nse_session():
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.nseindia.com/",
+    })
+    # Step 1: warm up the session — get cookies from homepage
+    session.get("https://www.nseindia.com", timeout=10)
+    # Step 2: hit the market status page (sets more cookies)
+    session.get("https://www.nseindia.com/market-data/live-equity-market", timeout=10)
+    return session
+
+
+def fetch_nse(session, url):
+    response = session.get(url, timeout=10)
+    
+    # Log actual response for debugging
+    if not response.text.strip():
+        logging.error(f"Empty body | status={response.status_code} | url={url}")
+        raise ValueError("Empty response body")
+    
+    if response.headers.get("Content-Type", "").startswith("text/html"):
+        logging.error(f"Got HTML instead of JSON — likely blocked/redirected | url={url}")
+        logging.error(f"Response snippet: {response.text[:300]}")
+        raise ValueError("HTML response received")
+    
+    return response.json()
 
 
 def fetch_premarket(session: requests.Session) -> list[dict]:
@@ -353,6 +378,7 @@ def run_report():
     log.info("=== Premarket Report — %s ===", today)
 
     session = get_nse_session()
+    data = fetch_nse(requests.session, "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY")
 
     # ── Snapshot 1 @ 9:00 AM ──
     log.info("Fetching snapshot 1 (9:00 AM)…")
