@@ -99,50 +99,31 @@ def is_trading_day(d: date = None) -> bool:
 #  DATA FETCH  — NSE premarket endpoint
 # ─────────────────────────────────────────────
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://www.nseindia.com/",
-}
-
 NSE_PREMARKET_URL = "https://www.nseindia.com/api/market-data-pre-open?key=ALL"
 
 
-def get_nse_session():
+def get_nse_session() -> requests.Session:
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://www.nseindia.com/",
     })
-    # Step 1: warm up the session — get cookies from homepage
-    session.get("https://www.nseindia.com", timeout=10)
-    # Step 2: hit the market status page (sets more cookies)
-    session.get("https://www.nseindia.com/market-data/live-equity-market", timeout=10)
+    # Step 1: warm up — get cookies from homepage
+    try:
+        session.get("https://www.nseindia.com", timeout=10)
+    except Exception as e:
+        log.warning("Homepage warm-up failed (non-fatal): %s", e)
+    # Step 2: second cookie set from market-data page
+    try:
+        session.get("https://www.nseindia.com/market-data/live-equity-market", timeout=10)
+    except Exception as e:
+        log.warning("Market-data warm-up failed (non-fatal): %s", e)
     return session
-
-
-def fetch_nse(session, url):
-    response = session.get(url, timeout=10)
-    
-    # Log actual response for debugging
-    if not response.text.strip():
-        logging.error(f"Empty body | status={response.status_code} | url={url}")
-        raise ValueError("Empty response body")
-    
-    if response.headers.get("Content-Type", "").startswith("text/html"):
-        logging.error(f"Got HTML instead of JSON — likely blocked/redirected | url={url}")
-        logging.error(f"Response snippet: {response.text[:300]}")
-        raise ValueError("HTML response received")
-    
-    return response.json()
 
 
 def fetch_premarket(session: requests.Session) -> list[dict]:
@@ -153,6 +134,18 @@ def fetch_premarket(session: requests.Session) -> list[dict]:
     try:
         resp = session.get(NSE_PREMARKET_URL, timeout=10)
         resp.raise_for_status()
+
+        # Guard: empty body
+        if not resp.text.strip():
+            log.error("Empty body | status=%s | url=%s", resp.status_code, NSE_PREMARKET_URL)
+            return []
+
+        # Guard: HTML instead of JSON (blocked / redirected)
+        content_type = resp.headers.get("Content-Type", "")
+        if "text/html" in content_type:
+            log.error("Got HTML instead of JSON — likely blocked. snippet: %s", resp.text[:300])
+            return []
+
         raw = resp.json().get("data", [])
         result = []
         for item in raw:
@@ -176,6 +169,7 @@ def fetch_premarket(session: requests.Session) -> list[dict]:
                 "pChange":   p_change,
             })
         return result
+
     except Exception as e:
         log.error("Fetch failed: %s", e)
         return []
@@ -190,23 +184,6 @@ def select_top_bottom(stocks: list[dict], n: int = 5):
     advances = sorted_stocks[:n]
     declines = sorted_stocks[-n:][::-1]   # worst first
     return advances, declines
-
-
-def merge_snapshots(snap1: list[dict], snap2: list[dict]) -> dict[str, dict]:
-    """
-    Returns { symbol: { s1: {...}, s2: {...} } }
-    Keyed by symbol from union of both snapshots' selected stocks.
-    """
-    by_sym1 = {s["symbol"]: s for s in snap1}
-    by_sym2 = {s["symbol"]: s for s in snap2}
-    all_syms = set(by_sym1) | set(by_sym2)
-    merged = {}
-    for sym in all_syms:
-        merged[sym] = {
-            "s1": by_sym1.get(sym),
-            "s2": by_sym2.get(sym),
-        }
-    return merged
 
 
 def trend_arrow(c1: float, c2: float) -> str:
@@ -243,8 +220,8 @@ def build_row(
     trend = trend_arrow(c1, c2) if (c1 is not None and c2 is not None) else "—"
     trend_color = "#16a34a" if "Bullish" in trend else ("#dc2626" if "Bearish" in trend else "#6b7280")
 
-    ltp1   = s1["ltp"]      if s1 else None
-    ltp2   = s2["ltp"]      if s2 else None
+    ltp1 = s1["ltp"] if s1 else None
+    ltp2 = s2["ltp"] if s2 else None
 
     return f"""
     <tr class="{row_class}">
@@ -279,35 +256,35 @@ def build_table(title: str, stocks: list[tuple], section_class: str) -> str:
 
 CSS = """
 <style>
-  body {{ font-family: 'Segoe UI', Arial, sans-serif; background:#f4f6f9; margin:0; padding:20px; }}
-  .container {{ max-width:680px; margin:auto; background:#fff; border-radius:12px;
-                box-shadow:0 2px 12px rgba(0,0,0,.1); overflow:hidden; }}
-  .header {{ background:linear-gradient(135deg,#1e3a5f,#2563eb); color:#fff;
-             padding:24px 28px; }}
-  .header h1 {{ margin:0; font-size:20px; letter-spacing:.5px; }}
-  .header .sub {{ margin:4px 0 0; font-size:13px; opacity:.8; }}
-  .body {{ padding:24px 28px; }}
-  .section {{ margin-bottom:28px; }}
-  .section-title {{ font-size:14px; font-weight:700; letter-spacing:.4px;
+  body { font-family: 'Segoe UI', Arial, sans-serif; background:#f4f6f9; margin:0; padding:20px; }
+  .container { max-width:680px; margin:auto; background:#fff; border-radius:12px;
+                box-shadow:0 2px 12px rgba(0,0,0,.1); overflow:hidden; }
+  .header { background:linear-gradient(135deg,#1e3a5f,#2563eb); color:#fff;
+             padding:24px 28px; }
+  .header h1 { margin:0; font-size:20px; letter-spacing:.5px; }
+  .header .sub { margin:4px 0 0; font-size:13px; opacity:.8; }
+  .body { padding:24px 28px; }
+  .section { margin-bottom:28px; }
+  .section-title { font-size:14px; font-weight:700; letter-spacing:.4px;
                     text-transform:uppercase; margin-bottom:10px; padding:6px 10px;
-                    border-radius:6px; }}
-  .advances .section-title {{ background:#dcfce7; color:#15803d; }}
-  .declines .section-title {{ background:#fee2e2; color:#b91c1c; }}
-  table {{ width:100%; border-collapse:collapse; font-size:13px; }}
-  th {{ background:#f1f5f9; text-align:left; padding:9px 10px; color:#475569;
-        font-size:11px; text-transform:uppercase; letter-spacing:.5px; }}
-  td {{ padding:9px 10px; border-bottom:1px solid #f1f5f9; color:#1e293b; vertical-align:middle; }}
-  tr.alt td {{ background:#fafbfc; }}
-  .sym {{ font-weight:700; font-size:13px; color:#1e293b; }}
-  .pct {{ font-size:11px; font-weight:600; }}
-  .pos {{ color:#16a34a; }}
-  .neg {{ color:#dc2626; }}
-  .trend {{ font-weight:600; font-size:12px; }}
-  .footer {{ background:#f8fafc; padding:14px 28px; font-size:11px;
-             color:#94a3b8; border-top:1px solid #e2e8f0; text-align:center; }}
-  @media (max-width:600px) {{
-    td, th {{ padding:7px 6px; font-size:12px; }}
-  }}
+                    border-radius:6px; }
+  .advances .section-title { background:#dcfce7; color:#15803d; }
+  .declines .section-title { background:#fee2e2; color:#b91c1c; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { background:#f1f5f9; text-align:left; padding:9px 10px; color:#475569;
+        font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+  td { padding:9px 10px; border-bottom:1px solid #f1f5f9; color:#1e293b; vertical-align:middle; }
+  tr.alt td { background:#fafbfc; }
+  .sym { font-weight:700; font-size:13px; color:#1e293b; }
+  .pct { font-size:11px; font-weight:600; }
+  .pos { color:#16a34a; }
+  .neg { color:#dc2626; }
+  .trend { font-weight:600; font-size:12px; }
+  .footer { background:#f8fafc; padding:14px 28px; font-size:11px;
+             color:#94a3b8; border-top:1px solid #e2e8f0; text-align:center; }
+  @media (max-width:600px) {
+    td, th { padding:7px 6px; font-size:12px; }
+  }
 </style>
 """
 
@@ -377,8 +354,8 @@ def run_report():
 
     log.info("=== Premarket Report — %s ===", today)
 
+    # ── Build session once; reuse for both snapshots ──
     session = get_nse_session()
-    data = fetch_nse(requests.session, "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY")
 
     # ── Snapshot 1 @ 9:00 AM ──
     log.info("Fetching snapshot 1 (9:00 AM)…")
@@ -398,23 +375,14 @@ def run_report():
         log.error("Empty data — aborting report.")
         return
 
-    # Select top/bottom from combined average change
-    # Use snapshot 2 as primary ranking (more current)
+    # Select top/bottom — use snapshot 2 as primary ranking (more current)
     adv2, dec2 = select_top_bottom(snap2_raw, TOP_N)
     adv1, dec1 = select_top_bottom(snap1_raw, TOP_N)
 
-    # Union of symbols from both snapshots
     by1 = {s["symbol"]: s for s in snap1_raw}
     by2 = {s["symbol"]: s for s in snap2_raw}
 
-    def to_rows(primary_list: list[dict]) -> list[tuple]:
-        rows = []
-        for item in primary_list:
-            sym = item["symbol"]
-            rows.append((sym, by1.get(sym), by2.get(sym)))
-        return rows
-
-    # Final symbol list: union deduplicated, sorted by snap2 pChange
+    # Final symbol list: union deduplicated, snap2 ordering takes priority
     all_syms_adv = list(dict.fromkeys([s["symbol"] for s in adv2] + [s["symbol"] for s in adv1]))[:TOP_N]
     all_syms_dec = list(dict.fromkeys([s["symbol"] for s in dec2] + [s["symbol"] for s in dec1]))[:TOP_N]
 
@@ -436,9 +404,7 @@ def run_report():
 def scheduler_loop():
     """
     Schedules run_report() at 9:00 AM IST every weekday.
-    (The 10-minute buffer before 9:10 send is the 2-min sleep + processing time.)
-    We kick off at 9:00 so snapshot1 captures the open tick,
-    then sleep 120s for snapshot2, then build+send (~9:05–9:10).
+    Snapshot 1 @ 9:00 AM → sleep 120s → Snapshot 2 @ 9:02 AM → send ~9:05–9:10 AM.
     """
     log.info("Scheduler started. Waiting for 09:00 IST on trading days…")
     schedule.every().monday.at("09:00").do(run_report)
