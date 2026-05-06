@@ -3,8 +3,8 @@ name: NSE Premarket Report
 on:
   schedule:
     #  GitHub cron is UTC — 9:00 AM IST = 3:30 AM UTC
-    #  We start at 3:30 UTC so snapshot1 = ~9:00 IST, snapshot2 = ~9:02 IST
-    - cron: '30 3 * * 1-5'   # Mon–Fri only
+    # cron: '30 3 * * 1-5'   # snapshot1 → 9:00 AM IST
+    - cron: '32 3 * * 1-5'   # snapshot2 → 9:02 AM IST
 
   workflow_dispatch:          # allows manual trigger from GitHub UI for testing
 
