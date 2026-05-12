@@ -2,7 +2,10 @@
 """
 NSE Premarket Report - Sends top 5 advances & bottom 5 declines at 9:10 AM IST
 Filtered to F&O securities only.
-Fetches data snapshots at 9:00 AM and 9:02 AM.
+
+Snapshot strategy:
+  - Snap 1 @ 9:00 AM → stored in-memory (used only for trend arrow)
+  - Snap 2 @ 9:02 AM → drives ranking + email content
 
 Setup:
     pip install requests pytz schedule
@@ -403,52 +406,61 @@ def send_email(html_body: str, subject: str):
 # ─────────────────────────────────────────────
 
 def run_report():
-    today = datetime.now(IST).date()
+    now_ist = datetime.now(IST)
+    today   = now_ist.date()
+
     if not is_trading_day(today):
         log.info("Non-trading day (%s) — skipping.", today)
         return
 
     log.info("=== Premarket Report — %s ===", today)
 
+    # ── Startup delay check (GitHub Actions queuing) ──
+    # Cron fires at 9:00 AM IST; warn if runner started significantly late.
+    started_at = now_ist.strftime("%I:%M %p IST")
+    hour, minute = now_ist.hour, now_ist.minute
+    elapsed_minutes = (hour - 9) * 60 + minute   # minutes past 9:00 AM IST
+    if elapsed_minutes > 5:
+        log.warning(
+            "Runner started at %s — %d min late (GitHub queue delay). "
+            "Data will reflect actual fetch time, not 9:00 AM.",
+            started_at, elapsed_minutes,
+        )
+
     session = get_nse_session()
 
     # ── Fetch F&O symbol list once; reused for both snapshots ──
     fo_symbols = get_fo_symbols(session)
 
-    # ── Snapshot 1 @ 9:00 AM ──
-    log.info("Fetching snapshot 1 (9:00 AM)…")
+    # ── Snapshot 1 — stored in-memory for trend comparison only ──
+    # Label is fixed to the intended window (09:00 AM), not wall-clock post-fetch.
+    # Actual fetch time is logged; if runner was delayed, the warning above covers it.
+    log.info("Fetching snapshot 1…")
     snap1_raw = fetch_premarket(session, fo_symbols)
     t1_str = datetime.now(IST).strftime("%I:%M %p")
+    log.info("Snapshot 1 fetched at %s IST", t1_str)
 
     log.info("Waiting 120 s for snapshot 2…")
     time.sleep(120)
 
-    # ── Snapshot 2 @ 9:02 AM ──
-    log.info("Fetching snapshot 2 (9:02 AM)…")
+    # ── Snapshot 2 — drives ranking and email ──
+    log.info("Fetching snapshot 2…")
     snap2_raw = fetch_premarket(session, fo_symbols)
     t2_str = datetime.now(IST).strftime("%I:%M %p")
+    log.info("Snapshot 2 fetched at %s IST", t2_str)
 
     if not snap1_raw or not snap2_raw:
         log.error("Empty data — aborting report.")
         return
 
-    # Rank by snapshot 2 (more current); snap 1 used for trend only
+    # Snap 1: in-memory lookup for trend arrow only
+    snap1_by_symbol: dict[str, dict] = {s["symbol"]: s for s in snap1_raw}
+
+    # Snap 2: exclusively drives Top 5 / Bottom 5 ranking
     adv2, dec2 = select_top_bottom(snap2_raw, TOP_N)
-    adv1, dec1 = select_top_bottom(snap1_raw, TOP_N)
 
-    by1 = {s["symbol"]: s for s in snap1_raw}
-    by2 = {s["symbol"]: s for s in snap2_raw}
-
-    # Deduplicated union — snap2 ordering takes priority
-    all_syms_adv = list(dict.fromkeys(
-        [s["symbol"] for s in adv2] + [s["symbol"] for s in adv1]
-    ))[:TOP_N]
-    all_syms_dec = list(dict.fromkeys(
-        [s["symbol"] for s in dec2] + [s["symbol"] for s in dec1]
-    ))[:TOP_N]
-
-    adv_rows = [(sym, by1.get(sym), by2.get(sym)) for sym in all_syms_adv]
-    dec_rows = [(sym, by1.get(sym), by2.get(sym)) for sym in all_syms_dec]
+    adv_rows = [(s["symbol"], snap1_by_symbol.get(s["symbol"]), s) for s in adv2]
+    dec_rows = [(s["symbol"], snap1_by_symbol.get(s["symbol"]), s) for s in dec2]
 
     report_date = today.strftime("%A, %d %B %Y")
     html    = build_html(adv_rows, dec_rows, t1_str, t2_str, report_date)
@@ -465,7 +477,7 @@ def run_report():
 def scheduler_loop():
     """
     Snapshot 1 @ 9:00 AM IST -> sleep 120s ->
-    Snapshot 2 @ 9:02 AM IST -> build + send ~9:05-9:10 AM IST.
+    Snapshot 2 @ 9:02 AM IST -> build + send ~9:05 AM IST.
     """
     log.info("Scheduler started. Waiting for 09:00 IST on trading days...")
     for day in ("monday", "tuesday", "wednesday", "thursday", "friday"):

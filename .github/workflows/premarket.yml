@@ -2,20 +2,22 @@ name: NSE Premarket Report
 
 on:
   schedule:
-    #  GitHub cron is UTC — 9:00 AM IST = 3:30 AM UTC
-    # cron: '30 3 * * 1-5'   # snapshot1 → 9:00 AM IST
-    - cron: '32 3 * * 1-5'   # snapshot2 → 9:02 AM IST
-
-  workflow_dispatch:          # allows manual trigger from GitHub UI for testing
+    # 9:00 AM IST = 3:30 AM UTC
+    # GitHub Actions cron has ~1-10 min queue delay on free tier.
+    # The script records actual fetch times and warns if start is >5 min late.
+    - cron: '30 3 * * 1-5'
+  workflow_dispatch:   # manual trigger for testing
 
 jobs:
   send-report:
     runs-on: ubuntu-latest
+    timeout-minutes: 10   # safety net — kills job if NSE blocks and script hangs
 
     env:
-      GMAIL_SENDER:  ${{ secrets.GMAIL_SENDER }}
+      GMAIL_SENDER:   ${{ secrets.GMAIL_SENDER }}
       GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
-      REPORT_TO:     ${{ secrets.REPORT_TO }}
+      REPORT_TO:      ${{ secrets.REPORT_TO }}
+      TZ: Asia/Kolkata   # set system timezone to IST on the runner
 
     steps:
       - name: Checkout repo
@@ -28,6 +30,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install requests pytz schedule
+
+      - name: Show runner start time (IST)
+        run: python -c "from datetime import datetime; import pytz; print('Runner started at:', datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%I:%M %p IST'))"
 
       - name: Run premarket report
         run: python main.py --run-once
